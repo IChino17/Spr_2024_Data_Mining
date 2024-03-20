@@ -1,0 +1,301 @@
+---
+title: "Decision Tree and Naïve Cross-validation"
+author: "Israel Chino"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+# Task I
+
+# Set up, Data import, and Preparation
+
+## A
+
+### library import
+
+```{r library import}
+
+library(rmarkdown)
+library(C50)
+library(e1071)
+library(caret)
+library(rminer)
+library(matrixStats)
+library(knitr)
+library(psych)
+library(tidyverse)
+
+```
+
+
+### Data import
+```{r Data import}
+mydir  <- getwd()
+setwd(mydir)
+
+cd <- read.csv(file = "03162024_CD_additional_modified.csv", stringsAsFactors = FALSE)
+
+#Fuction to set char to factors
+
+find_char <- function(x){ if(is.character(x)) { as.factor(x)} else {x}}
+
+cd <- cd %>%
+  mutate(across(where(is.character), find_char))
+
+cd %>% str()
+
+cd %>% summary()
+
+```
+
+## B
+
+```{r Partition CD data frame}
+
+set.seed(100)
+
+inTrain <- createDataPartition(cd$y, p=0.7, list=FALSE)
+
+train_set <- cd[inTrain,]
+test_set <- cd[-inTrain,]
+
+cd %>% pull(y) %>% table() %>% prop.table() %>% round(2)
+train_set %>% pull(y) %>% table() %>% prop.table() %>% round(2)
+test_set %>% pull(y) %>% table() %>% prop.table() %>% round(2)
+
+
+
+```
+
+
+## C
+
+```{r}
+cd %>%
+  pull(y) %>%
+  table() %>% 
+  prop.table() %>% 
+  round(2) %>% 
+  as.data.frame() %>% 
+  setNames(c("Category", "Proportion")) %>% 
+  mutate(Count = table(cd %>% pull(y))[as.character(Category)])
+
+
+train_set %>%
+  pull(y) %>%
+  table() %>% 
+  prop.table() %>% 
+  round(2) %>% 
+  as.data.frame() %>% 
+  setNames(c("Category", "Proportion")) %>% 
+  mutate(Count = table(cd %>% pull(y))[as.character(Category)])
+
+test_set %>%
+  pull(y) %>%
+  table() %>% 
+  prop.table() %>% 
+  round(2) %>% 
+  as.data.frame() %>% 
+  setNames(c("Category", "Proportion")) %>% 
+  mutate(Count = table(cd %>% pull(y))[as.character(Category)])
+
+
+
+```
+
+
+
+# Simple Decision Tree Training and Testing
+
+## A
+
+```{r C5.0 training}
+tree_cf_1 <- C5.0( y ~.,train_set,control = C5.0Control())
+
+tree_cf_1 %>% summary()
+
+tree_cf_1_train_predictions <- predict(tree_cf_1,train_set)
+
+mmetric(train_set$y, tree_cf_1_train_predictions, metric="CONF")
+
+evaluation_metrics_vector <- c("ACC","F1","PRECISION","TPR")
+
+mmetric(train_set$y, tree_cf_1_train_predictions, metric=evaluation_metrics_vector)
+
+```
+
+## B
+
+```{r Train and Test to classify y}
+#Train
+tree_cf_2 <- C5.0( y ~.,train_set,control = C5.0Control(CF=.004,earlyStopping = FALSE,noGlobalPruning = FALSE))
+
+tree_cf_2 %>% summary()
+
+tree_cf_2_train_predictions <- predict(tree_cf_2,train_set)
+
+mmetric(train_set$y, tree_cf_2_train_predictions, metric="CONF")
+
+evaluation_metrics_vector <- c("ACC","F1","PRECISION","TPR")
+
+mmetric(train_set$y, tree_cf_2_train_predictions, metric=evaluation_metrics_vector)
+
+#Test
+
+tree_cf_2_test_predictions <- predict(tree_cf_2,test_set)
+
+mmetric(test_set$y, tree_cf_2_test_predictions, metric="CONF")
+
+mmetric(test_set$y, tree_cf_2_test_predictions, metric=evaluation_metrics_vector)
+
+
+```
+
+## Simple Naïve Bayes Model Training and Testing
+
+### A
+
+```{r Training a naive Bayes model}
+formula <- y ~ .
+
+cd_w1_nb <- naiveBayes(formula, data = cd)
+
+table(predict(cd_w1_nb, cd), cd[,21])
+
+cd_w1_nb
+
+```
+
+
+### B
+
+```{r removing one predictor}
+formula <- y ~ . - age
+
+cd_w2_nb <- naiveBayes(formula, data = cd)
+
+cd_w2_nb
+
+table(predict(cd_w2_nb, cd), cd[,21])
+
+cd0 <- subset(cd, y == "0")
+#summary(cd0)
+cd1 <- subset(cd, y == "1")
+#summary(cd1)
+
+
+predicted_y_w1 <- predict(cd_w1_nb, cd)
+
+mmetric(cd$y, predicted_y_w1, metric="CONF")
+
+mmetric(cd$y, predicted_y_w1, metric=c("ACC","F1","PRECISION","TPR"))
+
+
+```
+
+
+# Create a Named Cross-validation Function – cv_function
+
+## A
+
+```{r cv_function}
+cv_function <- function(df, target, nFolds, seedVal, classification, metrics_list)
+{ set.seed(seedVal)
+  folds = createFolds(df[,target],nFolds)
+  # folds
+ 
+ cv_results <- lapply(folds, function(x)
+ { 
+   train <- df[-x,-target]
+   test  <- df[x,-target]
+   
+   train_target <- df[-x,target]
+   test_target <- df[x,target]
+   
+   classification_model <- classification(train,train_target) 
+   
+   pred<- predict(classification_model,test)
+   
+   return(mmetric(test_target,pred,metrics_list))
+ })
+ 
+ cv_results_m <- as.matrix(as.data.frame(cv_results))
+
+ cv_mean<- as.matrix(rowMeans(cv_results_m))
+ 
+ colnames(cv_mean) <- "Mean"
+ 
+ cv_sd <- as.matrix(rowSds(cv_results_m))
+ 
+ colnames(cv_sd) <- "Sd"
+ 
+ cv_all <- cbind(cv_results_m, cv_mean, cv_sd)
+ 
+ kable(cv_all,digits=2)
+}
+```
+
+## B
+
+```{r cross validation 3 fold}
+
+metrics_list <- c("ACC","PRECISION","TPR","F1")
+
+cv_function(metrics_list =  metrics_list, 
+            df = cd, 
+          target = 21, 
+          nFolds = 3, 
+            seed = 100,
+            classification =  naiveBayes)
+
+
+```
+
+# C5.0 and naive Bayes evaluation performance with cv_function 
+
+## 5-fold
+
+```{r 5-fold}
+metrics_list <- c("ACC","PRECISION","TPR","F1")
+
+cv_function(metrics_list =  metrics_list, 
+            df = cd, 
+          target = 21, 
+          nFolds = 5, 
+            seed = 100,
+            classification =  naiveBayes)
+
+
+```
+
+## 10-fold
+
+```{r 10-fold}
+metrics_list <- c("ACC","PRECISION","TPR","F1")
+
+cv_function(metrics_list =  metrics_list, 
+            df = cd, 
+          target = 21, 
+          nFolds = 10, 
+            seed = 100,
+            classification =  naiveBayes)
+```
+
+
+# Task II: Reflections
+
+
+In my experience with the naive Bayes model, I've learned that it can be more beneficial for time-sensitive work. It's faster since it requires fewer model entries and produces metrics that are relatively close to those of the decision tree. However, the decision tree model seems to be more accurate overall and detailed than the naive Bayes.
+
+The strength of the naive Bayes model lies in the time it takes to create it. This week's project and the model's quickness are advantageous since they yield accurate results quickly, similar to the decision tree. The decision tree, on the other hand, requires more adjustments to make it the best possible model.
+
+In these projects, every adjustment made to the model and variables brings it closer to the best outcome. Before this class, I thought it was easier to get close to perfect predictions, but now I understand the importance of being as close as possible to the most accurate model.
+
+I've realized that changing the folds also significantly affects the outcome. Having more folds improves the overall file's precision. In data mining, each model has its strengths. The decision tree helps find specific details in the data, but it takes more time to clean up and prepare. The naive Bayes model is quicker but may not produce as good results as the decision tree.
+
+
