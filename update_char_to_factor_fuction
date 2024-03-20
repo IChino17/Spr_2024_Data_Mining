@@ -1,0 +1,14 @@
+##find and change all char to factors
+#df is the data frame
+
+library(tidyverse)
+
+find_char <- function(x){ if(is.character(x)) { as.factor(x)} else {x}}
+
+df <- df %>%
+  mutate(across(where(is.character), find_char))
+
+cd %>% str()
+
+cd %>% summary()
+
